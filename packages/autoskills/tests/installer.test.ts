@@ -424,6 +424,67 @@ describe("installSkill", () => {
     }
   });
 
+  it("does not send Authorization headers to raw.githubusercontent.com (#124)", async () => {
+    const regDir = join(tmp.path, "registry");
+    const projectDir = join(tmp.path, "project");
+    mkdirSync(projectDir, { recursive: true });
+    buildRegistry(regDir, [
+      { name: "raw-auth-skill", source: "owner/repo", files: { "SKILL.md": "# raw" } },
+    ]);
+    _setRegistryDir(regDir);
+
+    const prevCacheDir = process.env.AUTOSKILLS_CACHE_DIR;
+    const prevToken = process.env.GITHUB_TOKEN;
+    process.env.AUTOSKILLS_CACHE_DIR = join(tmp.path, "raw-auth-cache");
+    process.env.GITHUB_TOKEN = "github_pat_invalid_should_not_be_sent";
+    const seenAuth: Array<string | null> = [];
+    try {
+      const result = await installSkill("owner/repo/raw-auth-skill", [], {
+        projectDir,
+        registryDir: join(tmp.path, "manifest-only"),
+        fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+          const href = typeof url === "string" || url instanceof URL ? String(url) : url.url;
+          ok(href.includes("raw.githubusercontent.com"));
+          const headers = new Headers(init?.headers);
+          seenAuth.push(headers.get("authorization"));
+          return fetchFromRegistry(regDir)(url);
+        }) as typeof fetch,
+      });
+      ok(result.success, result.output);
+      ok(seenAuth.length > 0);
+      ok(seenAuth.every((value) => value === null));
+    } finally {
+      if (prevCacheDir === undefined) delete process.env.AUTOSKILLS_CACHE_DIR;
+      else process.env.AUTOSKILLS_CACHE_DIR = prevCacheDir;
+      if (prevToken === undefined) delete process.env.GITHUB_TOKEN;
+      else process.env.GITHUB_TOKEN = prevToken;
+    }
+  });
+
+  it("accepts local registry text files that were checked out with CRLF on Windows", async () => {
+    const regDir = join(tmp.path, "registry");
+    const projectDir = join(tmp.path, "project");
+    mkdirSync(projectDir, { recursive: true });
+    // Manifest hashes LF content; on-disk file is CRLF (Windows autocrlf).
+    const lf = "---\nname: crlf-skill\n---\n# hello\n";
+    buildRegistry(regDir, [{ name: "crlf-skill", source: "owner/repo", files: { "SKILL.md": lf } }]);
+    writeFileSync(join(regDir, "crlf-skill", "SKILL.md"), lf.replace(/\n/g, "\r\n"));
+    _setRegistryDir(regDir);
+
+    const result = await installSkill("owner/repo/crlf-skill", [], {
+      projectDir,
+      registryDir: regDir,
+      fetchImpl: (async () => {
+        throw new Error("unexpected fetch — should use local registry");
+      }) as typeof fetch,
+    });
+    ok(result.success, result.output);
+    equal(
+      readFileSync(join(projectDir, ".agents", "skills", "crlf-skill", "SKILL.md"), "utf-8"),
+      lf,
+    );
+  });
+
   it("downloads from the raw GitHub registry by default", async () => {
     const regDir = join(tmp.path, "registry");
     const projectDir = join(tmp.path, "project");

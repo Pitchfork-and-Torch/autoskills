@@ -126,16 +126,15 @@ export function multiSelect<T>(
     }
 
     const showGroups = groupCount > 1;
-    const visibleGroupCount = showGroups ? groupCount : 0;
-    const separatorCount = showGroups ? groupCount - 1 : 0;
 
-    function renderedLineCount(): number {
-      return items.length + visibleGroupCount + separatorCount + 1;
-    }
+    // Track exact newline count so re-renders clear the previous frame.
+    // Under-counting leaves stale rows (duplicate list items) in Warp/Windows
+    // terminals when navigating with arrows (#126).
+    let linesDrawn = 0;
 
     function clearRendered(): void {
-      if (rendered) {
-        write(`\x1b[${renderedLineCount()}A\r\x1b[J`);
+      if (rendered && linesDrawn > 0) {
+        write(`\x1b[${linesDrawn}A\r\x1b[J`);
       }
     }
 
@@ -149,29 +148,36 @@ export function multiSelect<T>(
       const count = selected.filter(Boolean).length;
       let lastGroup: string | null = null;
       let isFirstGroup = true;
+      let newlines = 0;
+
+      const writeln = (line: string): void => {
+        write(line + "\n");
+        newlines += 1;
+      };
 
       for (let i = 0; i < items.length; i++) {
         if (showGroups && groupFn) {
           const group = groupFn(items[i]);
           if (group !== lastGroup) {
-            if (!isFirstGroup) write("\n");
+            if (!isFirstGroup) writeln("");
             isFirstGroup = false;
             lastGroup = group;
-            write(`   ${bold(yellow(group))}\n`);
+            writeln(`   ${bold(yellow(group))}`);
           }
         }
         const pointer = i === cursor ? cyan("❯") : " ";
         const check = selected[i] ? green("◼") : dim("◻");
         const label = labelFn(items[i], i);
         const hint = hintFn ? hintFn(items[i], i) : "";
-        write(`     ${pointer} ${check} ${label}${hint ? "  " + dim(hint) : ""}\n`);
+        writeln(`     ${pointer} ${check} ${label}${hint ? "  " + dim(hint) : ""}`);
       }
-      write("\n");
+      writeln("");
       const shortcutHints = shortcuts
         .map((s) => white(bold(`[${s.key}]`)) + dim(` ${s.label}`))
         .join(dim(" · "));
       const shortcutPart = shortcuts.length > 0 ? shortcutHints + dim(" · ") : "";
-      write(
+      // Footer ends with a newline so the next clear moves by a stable line count.
+      writeln(
         dim("   ") +
           white(bold("[↑↓]")) +
           dim(" move · ") +
@@ -183,6 +189,7 @@ export function multiSelect<T>(
           white(bold("[enter]")) +
           dim(` confirm (${count}/${items.length})`),
       );
+      linesDrawn = newlines;
     }
 
     write(HIDE_CURSOR);
@@ -198,14 +205,27 @@ export function multiSelect<T>(
     function onData(data: string): void {
       if (settled) return;
 
-      if (data.startsWith("\x1b")) {
-        processKey(data);
-        return;
-      }
-
-      for (const ch of data.replace(/\r\n/g, "\r")) {
-        if (settled) return;
-        processKey(ch);
+      // Parse CSI / single keys so batched arrow sequences from Warp/etc.
+      // each move the cursor once instead of being ignored as a long string.
+      let i = 0;
+      const s = data.replace(/\r\n/g, "\r");
+      while (i < s.length && !settled) {
+        if (s[i] === "\x1b") {
+          if (s[i + 1] === "[") {
+            let j = i + 2;
+            while (j < s.length && /[0-9;]/.test(s[j])) j++;
+            if (j < s.length) {
+              processKey(s.slice(i, j + 1));
+              i = j + 1;
+              continue;
+            }
+          }
+          // Bare ESC or incomplete sequence — skip one char
+          i += 1;
+          continue;
+        }
+        processKey(s[i]);
+        i += 1;
       }
     }
 
