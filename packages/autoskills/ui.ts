@@ -92,11 +92,19 @@ interface MultiSelectOptions<T> {
   groupFn?: (item: T) => string;
   initialSelected?: boolean[];
   shortcuts?: { key: string; label: string; fn: (items: T[]) => boolean[] }[];
+  writeFn?: (text: string) => void;
 }
 
 export function multiSelect<T>(
   items: T[],
-  { labelFn, hintFn, groupFn, initialSelected, shortcuts = [] }: MultiSelectOptions<T>,
+  {
+    labelFn,
+    hintFn,
+    groupFn,
+    initialSelected,
+    shortcuts = [],
+    writeFn = write,
+  }: MultiSelectOptions<T>,
 ): Promise<T[]> {
   if (initialSelected && initialSelected.length !== items.length) {
     throw new Error(
@@ -127,14 +135,9 @@ export function multiSelect<T>(
 
     const showGroups = groupCount > 1;
 
-    // Track exact newline count so re-renders clear the previous frame.
-    // Under-counting leaves stale rows (duplicate list items) in Warp/Windows
-    // terminals when navigating with arrows (#126).
-    let linesDrawn = 0;
-
     function clearRendered(): void {
-      if (rendered && linesDrawn > 0) {
-        write(`\x1b[${linesDrawn}A\r\x1b[J`);
+      if (rendered) {
+        writeFn("\x1b[u\x1b[J");
       }
     }
 
@@ -148,11 +151,9 @@ export function multiSelect<T>(
       const count = selected.filter(Boolean).length;
       let lastGroup: string | null = null;
       let isFirstGroup = true;
-      let newlines = 0;
 
       const writeln = (line: string): void => {
-        write(line + "\n");
-        newlines += 1;
+        writeFn(line + "\n");
       };
 
       for (let i = 0; i < items.length; i++) {
@@ -176,7 +177,6 @@ export function multiSelect<T>(
         .map((s) => white(bold(`[${s.key}]`)) + dim(` ${s.label}`))
         .join(dim(" · "));
       const shortcutPart = shortcuts.length > 0 ? shortcutHints + dim(" · ") : "";
-      // Footer ends with a newline so the next clear moves by a stable line count.
       writeln(
         dim("   ") +
           white(bold("[↑↓]")) +
@@ -189,10 +189,9 @@ export function multiSelect<T>(
           white(bold("[enter]")) +
           dim(` confirm (${count}/${items.length})`),
       );
-      linesDrawn = newlines;
     }
 
-    write(HIDE_CURSOR);
+    writeFn(HIDE_CURSOR + "\x1b[s");
     render();
 
     const { stdin } = process;
@@ -213,10 +212,15 @@ export function multiSelect<T>(
         if (s[i] === "\x1b") {
           if (s[i + 1] === "[") {
             let j = i + 2;
-            while (j < s.length && /[0-9;]/.test(s[j])) j++;
-            if (j < s.length) {
+            while (j < s.length && s.charCodeAt(j) >= 0x20 && s.charCodeAt(j) <= 0x3f) j++;
+            const finalByte = s.charCodeAt(j);
+            if (j < s.length && finalByte >= 0x40 && finalByte <= 0x7e) {
               processKey(s.slice(i, j + 1));
               i = j + 1;
+              continue;
+            }
+            if (s[j] === "\x1b") {
+              i = j;
               continue;
             }
           }
@@ -232,7 +236,7 @@ export function multiSelect<T>(
     function processKey(key: string): void {
       if (key === "\x03") {
         cleanup();
-        write(SHOW_CURSOR + "\n");
+        writeFn(SHOW_CURSOR + "\n");
         process.exit(0);
       }
 
@@ -240,7 +244,7 @@ export function multiSelect<T>(
         settled = true;
         cleanup();
         clearRendered();
-        write(SHOW_CURSOR);
+        writeFn(SHOW_CURSOR);
         resolve(items.filter((_, i) => selected[i]));
         return;
       }

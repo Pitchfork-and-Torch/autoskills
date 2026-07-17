@@ -391,6 +391,22 @@ describe("detectTechnologies", () => {
     strictEqual(isFrontend, false);
   });
 
+  it("does not mark ASP.NET Core projects as frontend from HTML assets", () => {
+    writeFile(tmp.path, "appsettings.json", "{}");
+    writeFile(tmp.path, "wwwroot/index.html", "<html></html>");
+    const { detected, isFrontend } = detectTechnologies(tmp.path);
+    ok(detected.some((t) => t.id === "aspnetcore"));
+    strictEqual(isFrontend, false);
+  });
+
+  it("does not mark Blazor projects as frontend from HTML assets alone", () => {
+    writeFile(tmp.path, "App.csproj", '<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">');
+    writeFile(tmp.path, "wwwroot/index.html", "<html></html>");
+    const { detected, isFrontend } = detectTechnologies(tmp.path);
+    ok(detected.some((t) => t.id === "aspnet-blazor"));
+    strictEqual(isFrontend, false);
+  });
+
   it("still marks pure HTML sites as frontend without backend signals", () => {
     writeFile(tmp.path, "public/index.html", "<html></html>");
     const { isFrontend } = detectTechnologies(tmp.path);

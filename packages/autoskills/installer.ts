@@ -292,7 +292,7 @@ function githubDownloadHeaders(url: string): HeadersInit {
   // GITHUB_TOKEN/GH_TOKEN Bearer to raw.githubusercontent.com makes GitHub
   // return 404 for public files (common on Windows when a stale User env
   // token shadows anonymous access). See midudev/autoskills#124.
-  if (token && /(^|\.)github\.com$/i.test(host) && !/githubusercontent\.com$/i.test(host)) {
+  if (token && host.toLowerCase() === "api.github.com") {
     headers.Authorization = `Bearer ${token}`;
   }
   return headers;
@@ -332,7 +332,7 @@ async function downloadRegistryFile(
       const resetSuffix = resetAt ? ` (resets ${new Date(resetAt).toISOString()})` : "";
       if (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0") {
         throw new Error(
-          `GitHub rate limit exceeded${resetSuffix}. Set GITHUB_TOKEN or GH_TOKEN to increase the limit.`,
+          `GitHub rate limit exceeded${resetSuffix} while downloading ${url}. Retry after the limit resets.`,
         );
       }
       errors.push(`${res.status} ${res.statusText} from ${baseUrl}`);

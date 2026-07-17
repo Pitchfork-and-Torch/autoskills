@@ -461,13 +461,51 @@ describe("installSkill", () => {
     }
   });
 
+  it("does not recommend tokens for anonymous raw-download rate limits", async () => {
+    const regDir = join(tmp.path, "registry");
+    const projectDir = join(tmp.path, "project");
+    mkdirSync(projectDir, { recursive: true });
+    buildRegistry(regDir, [
+      { name: "rate-limited-skill", source: "owner/repo", files: { "SKILL.md": "# raw" } },
+    ]);
+    _setRegistryDir(regDir);
+
+    const prevCacheDir = process.env.AUTOSKILLS_CACHE_DIR;
+    process.env.AUTOSKILLS_CACHE_DIR = join(tmp.path, "rate-limit-cache");
+    try {
+      const result = await installSkill("owner/repo/rate-limited-skill", [], {
+        projectDir,
+        registryDir: join(tmp.path, "manifest-only"),
+        fetchImpl: (async () =>
+          new Response("rate limited", {
+            status: 403,
+            statusText: "Forbidden",
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": "1893456000",
+            },
+          })) as typeof fetch,
+      });
+
+      ok(!result.success);
+      ok(result.output.includes("Retry after the limit resets."));
+      ok(!result.output.includes("GITHUB_TOKEN"));
+      ok(!result.output.includes("GH_TOKEN"));
+    } finally {
+      if (prevCacheDir === undefined) delete process.env.AUTOSKILLS_CACHE_DIR;
+      else process.env.AUTOSKILLS_CACHE_DIR = prevCacheDir;
+    }
+  });
+
   it("accepts local registry text files that were checked out with CRLF on Windows", async () => {
     const regDir = join(tmp.path, "registry");
     const projectDir = join(tmp.path, "project");
     mkdirSync(projectDir, { recursive: true });
     // Manifest hashes LF content; on-disk file is CRLF (Windows autocrlf).
     const lf = "---\nname: crlf-skill\n---\n# hello\n";
-    buildRegistry(regDir, [{ name: "crlf-skill", source: "owner/repo", files: { "SKILL.md": lf } }]);
+    buildRegistry(regDir, [
+      { name: "crlf-skill", source: "owner/repo", files: { "SKILL.md": lf } },
+    ]);
     writeFileSync(join(regDir, "crlf-skill", "SKILL.md"), lf.replace(/\n/g, "\r\n"));
     _setRegistryDir(regDir);
 
