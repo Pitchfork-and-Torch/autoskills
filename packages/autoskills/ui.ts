@@ -237,7 +237,7 @@ export function multiSelect<T>(
       if (key === "\x03") {
         cleanup();
         writeFn(SHOW_CURSOR + "\n");
-        process.exit(0);
+        process.exit(130);
       }
 
       if (key === "\r" || key === "\n") {
